@@ -3,6 +3,9 @@ import asyncio
 import logging
 import os
 import tempfile
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, InputSticker,
                       Update)
@@ -103,7 +106,32 @@ async def on_pack(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text(f"❌ Couldn't add to pack: {e}")
 
 
-def main():
+class _Health(BaseHTTPRequestHandler):
+    def _ok(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+
+    def do_GET(self):
+        self._ok()
+        self.wfile.write(b"ok")
+
+    def do_HEAD(self):
+        self._ok()
+
+    def log_message(self, *args):
+        pass
+
+
+def start_health_server():
+    """Open the port right away so Render sees the service as live."""
+    port = int(os.environ.get("PORT", "10000"))
+    server = HTTPServer(("0.0.0.0", port), _Health)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    logging.info("Health server listening on port %s", port)
+
+
+def build_app():
     app = (
         Application.builder()
         .token(TOKEN)
@@ -117,22 +145,20 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, on_logo))
     app.add_handler(CallbackQueryHandler(on_animation, pattern=r"^anim:"))
     app.add_handler(CallbackQueryHandler(on_pack, pattern=r"^pack$"))
+    return app
 
-    # On Render (or any host that gives a public URL) use webhook mode so the
-    # free instance can sleep and wake up when Telegram sends a message.
-    base_url = os.environ.get("WEBHOOK_URL") or os.environ.get("RENDER_EXTERNAL_URL")
-    if base_url:
-        port = int(os.environ.get("PORT", "10000"))
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path=TOKEN,
-            webhook_url=f"{base_url.rstrip('/')}/{TOKEN}",
-            drop_pending_updates=True,
-            bootstrap_retries=-1,
-        )
-    else:
-        app.run_polling(bootstrap_retries=-1)
+
+def main():
+    start_health_server()
+    while True:  # keep retrying if Telegram can't be reached at startup
+        try:
+            build_app().run_polling(
+                bootstrap_retries=-1, drop_pending_updates=True, close_loop=False
+            )
+            break
+        except Exception:  # noqa: BLE001
+            logging.exception("Bot crashed, retrying in 10 s")
+            time.sleep(10)
 
 
 if __name__ == "__main__":
