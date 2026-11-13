@@ -11,7 +11,7 @@ import tempfile
 
 from PIL import Image
 from lottie import NVector, objects
-from lottie.exporters.tgs import export_tgs
+from lottie.exporters.core import export_tgs
 from lottie.importers.svg import import_svg
 from lottie.objects import easing
 
@@ -138,52 +138,3 @@ def build_animation(svg_path, anim_key):
     an.width = an.height = SIZE
     an.frame_rate = FPS
     an.in_point, an.out_point = 0, FRAMES
-
-    null = objects.NullLayer()
-    null.in_point, null.out_point = 0, FRAMES
-    null.transform.anchor_point.value = NVector(C, C)
-    null.transform.position.value = NVector(C, C)
-    an.add_layer(null)
-    ANIMATIONS[anim_key][1](null)
-
-    # imported SVG layers: centred + fitted, parented to the animated null
-    for layer in list(svg.layers):
-        layer.in_point, layer.out_point = 0, FRAMES
-        layer.transform.anchor_point.value = NVector(w / 2, h / 2)
-        layer.transform.position.value = NVector(C, C)
-        layer.transform.scale.value = NVector(scale, scale)
-        layer.parent = null
-        an.add_layer(layer)
-    return an
-
-
-def _write_tgs(an, out_path):
-    try:
-        with open(out_path, "wb") as f:
-            export_tgs(an, f)
-    except TypeError:  # API difference between lottie versions
-        data = json.dumps(an.to_dict(), separators=(",", ":")).encode()
-        with gzip.open(out_path, "wb", 9) as f:
-            f.write(data)
-
-
-def make_tgs(src_path, anim_key, out_path):
-    """Returns out_path. Raises ValueError if it can't fit in 64 KB."""
-    is_svg = src_path.lower().endswith(".svg")
-    work = tempfile.mkdtemp(prefix="tgs_")
-
-    levels = [None] if is_svg else range(len(VECTOR_LEVELS))
-    for lvl in levels:
-        if is_svg:
-            svg_path = src_path
-        else:
-            svg_path = os.path.join(work, "trace.svg")
-            raster_to_svg(src_path, svg_path, lvl)
-        _write_tgs(build_animation(svg_path, anim_key), out_path)
-        if os.path.getsize(out_path) <= MAX_BYTES:
-            return out_path
-
-    raise ValueError(
-        "Logo is too detailed to fit Telegram's 64 KB limit. "
-        "Send a simpler / flatter version (ideally an SVG)."
-    )
